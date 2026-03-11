@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 // stb headers (implementation follows)
 #define STB_IMAGE_IMPLEMENTATION
@@ -99,35 +102,64 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Total loaded images: " << images.size() << std::endl;
 
-    // calculate total operations (images × resolutions) for progress reporting
-    size_t totalOps = images.size() * resolution_paths.size();
-    size_t opCount = 0;
+    // build a list of work items (image × resolution) so threads can consume
+    struct WorkItem {
+        const std::string* fname;
+        const ImageData* img;
+        Resolution res;
+        const std::filesystem::path* outdir;
+    };
 
-    // for each image, generate scaled square copies per resolution
+    std::vector<WorkItem> tasks;
+    tasks.reserve(images.size() * resolution_paths.size());
     for (const auto& [fname, img] : images) {
         for (const auto& [res, outdir] : resolution_paths) {
-            int target = size_for(res);
-            if (target <= 0) continue;
-            ++opCount;
-            std::cout << "Processing " << fname << " (" << to_string(res) << ") "
-                      << opCount << " of " << totalOps << std::endl;
+            if (size_for(res) <= 0) continue;
+            tasks.push_back(WorkItem{&fname, &img, res, &outdir});
+        }
+    }
 
-            size_t outSize = static_cast<size_t>(target) * target * img.channels;
+    size_t totalOps = tasks.size();
+    std::atomic<size_t> opCount{0};
+    std::mutex ioMutex; // protect cout
+
+    auto worker = [&](std::stop_token st) {
+        while (!st.stop_requested()) {
+            size_t i = opCount.fetch_add(1);
+            if (i >= totalOps)
+                break;
+            const WorkItem &item = tasks[i];
+            int target = size_for(item.res);
+            {
+                std::lock_guard<std::mutex> lock(ioMutex);
+                std::cout << "Processing " << *item.fname << " (" << to_string(item.res) << ") "
+                          << (i+1) << " of " << totalOps << std::endl;
+            }
+            size_t outSize = static_cast<size_t>(target) * target * item.img->channels;
             std::vector<unsigned char> outbuf(outSize);
-            stbir_resize_uint8_linear(img.pixels.data(), img.width, img.height, 0,
+            stbir_resize_uint8_linear(item.img->pixels.data(), item.img->width, item.img->height, 0,
                                        outbuf.data(), target, target, 0,
-                                       (stbir_pixel_layout)img.channels);
+                                       (stbir_pixel_layout)item.img->channels);
 
-            std::filesystem::path outpath = outdir / fname;
+            std::filesystem::path outpath = *item.outdir / *item.fname;
             outpath.replace_extension(".png");
-            if (!stbi_write_png(outpath.string().c_str(), target, target, img.channels,
-                                outbuf.data(), target * img.channels)) {
+            if (!stbi_write_png(outpath.string().c_str(), target, target, item.img->channels,
+                                outbuf.data(), target * item.img->channels)) {
+                std::lock_guard<std::mutex> lock(ioMutex);
                 std::cerr << "Failed to write " << outpath << std::endl;
             } else {
+                std::lock_guard<std::mutex> lock(ioMutex);
                 std::cout << "Saved " << outpath << std::endl;
             }
         }
-    }
+    };
+
+    // launch 8 threadst cou
+    std::vector<std::jthread> threads;
+    for (int t = 0; t < 8; ++t)
+        threads.emplace_back(worker);
+
+    // threads join automatically on destruction of jthread
 
     return 0;
 }
