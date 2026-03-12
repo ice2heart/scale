@@ -1,4 +1,3 @@
-#include <iostream>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -6,8 +5,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <print>
 
-// stb headers (implementation follows)
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -52,13 +51,13 @@ int size_for(Resolution r) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <directory>" << std::endl;
+        std::print("Usage: {} <directory>\n", argv[0]);
         return 1;
     }
 
     std::filesystem::path dir = argv[1];
     if (!std::filesystem::is_directory(dir)) {
-        std::cerr << "Not a directory: " << dir << std::endl;
+        std::print("Not a directory: {}\n", dir.generic_string());
         return 1;
     }
 
@@ -70,7 +69,7 @@ int main(int argc, char* argv[]) {
         std::error_code ec;
         std::filesystem::create_directory(sub, ec);
         if (ec) {
-            std::cerr << "Failed to create " << sub << ": " << ec.message() << std::endl;
+            std::print("Failed to create {}: {}\n", sub.string(), ec.message());
             continue;
         } 
         resolution_paths[r] = sub;
@@ -94,13 +93,13 @@ int main(int argc, char* argv[]) {
             img.pixels.assign(data, data + (w * h * c));
             stbi_image_free(data);
             images[filename] = std::move(img);
-            std::cout << "Loaded " << filename << " (" << w << "x" << h << ", " << c << " ch)\n";
+            std::print("Loaded {} ({}x{}, {} ch)\n", filename, w, h, c);
         } else {
             continue;
         }
     }
 
-    std::cout << "Total loaded images: " << images.size() << std::endl;
+    std::print("Total loaded images: {}\n", images.size());
 
     // build a list of work items (image × resolution) so threads can consume
     struct WorkItem {
@@ -121,7 +120,7 @@ int main(int argc, char* argv[]) {
 
     size_t totalOps = tasks.size();
     std::atomic<size_t> opCount{0};
-    std::mutex ioMutex; // protect cout
+    std::mutex ioMutex; // protect print
 
     auto worker = [&](std::stop_token st) {
         while (!st.stop_requested()) {
@@ -132,8 +131,8 @@ int main(int argc, char* argv[]) {
             int target = size_for(item.res);
             {
                 std::lock_guard<std::mutex> lock(ioMutex);
-                std::cout << "Processing " << *item.fname << " (" << to_string(item.res) << ") "
-                          << (i+1) << " of " << totalOps << std::endl;
+                std::print("Processing {} ({}) {} of {}\n",
+                           *item.fname, to_string(item.res), (i+1), totalOps);
             }
             size_t outSize = static_cast<size_t>(target) * target * item.img->channels;
             std::vector<unsigned char> outbuf(outSize);
@@ -146,10 +145,10 @@ int main(int argc, char* argv[]) {
             if (!stbi_write_png(outpath.string().c_str(), target, target, item.img->channels,
                                 outbuf.data(), target * item.img->channels)) {
                 std::lock_guard<std::mutex> lock(ioMutex);
-                std::cerr << "Failed to write " << outpath << std::endl;
+                std::print("Failed to write {}\n", outpath.string());
             } else {
                 std::lock_guard<std::mutex> lock(ioMutex);
-                std::cout << "Saved " << outpath << std::endl;
+                std::print("Saved {}\n", outpath.string());
             }
         }
     };
