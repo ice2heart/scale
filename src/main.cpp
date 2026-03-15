@@ -2,6 +2,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <array>
+#include <cstring>
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -80,8 +82,17 @@ int main(int argc, char* argv[]) {
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         if (!entry.is_regular_file())
             continue;
-        std::string filename = entry.path().filename().string();
-        std::string fullpath = entry.path().string();
+        const std::string filename = entry.path().filename().string();
+        std::string stem = entry.path().stem().string();
+        // Strip any existing resolution suffix from the stem (e.g. "image_4k.png")
+        constexpr std::array<const char*, 4> suffixes = {"_8k", "_4k", "_2k", "_1k"};
+        for (auto s : suffixes) {
+            if (stem.size() > std::strlen(s) && stem.ends_with(s)) {
+                stem.resize(stem.size() - std::strlen(s));
+                break;
+            }
+        }
+        const std::string fullpath = entry.path().string();
 
         int w, h, c;
         unsigned char* data = stbi_load(fullpath.c_str(), &w, &h, &c, 0);
@@ -92,7 +103,7 @@ int main(int argc, char* argv[]) {
             img.channels = c;
             img.pixels.assign(data, data + (w * h * c));
             stbi_image_free(data);
-            images[filename] = std::move(img);
+            images[stem] = std::move(img);
             std::print("Loaded {} ({}x{}, {} ch)\n", filename, w, h, c);
         } else {
             continue;
@@ -128,19 +139,20 @@ int main(int argc, char* argv[]) {
             if (i >= totalOps)
                 break;
             const WorkItem &item = tasks[i];
-            int target = size_for(item.res);
+            const std::string fname{*item.fname + "_" + to_string(item.res)};
+            const int target = size_for(item.res);
             {
                 std::lock_guard<std::mutex> lock(ioMutex);
                 std::print("Processing {} ({}) {} of {}\n",
                            *item.fname, to_string(item.res), (i+1), totalOps);
             }
-            size_t outSize = static_cast<size_t>(target) * target * item.img->channels;
+            const size_t outSize = static_cast<size_t>(target) * target * item.img->channels;
             std::vector<unsigned char> outbuf(outSize);
             stbir_resize_uint8_linear(item.img->pixels.data(), item.img->width, item.img->height, 0,
                                        outbuf.data(), target, target, 0,
                                        (stbir_pixel_layout)item.img->channels);
 
-            std::filesystem::path outpath = *item.outdir / *item.fname;
+            std::filesystem::path outpath = *item.outdir / fname;
             outpath.replace_extension(".png");
             if (!stbi_write_png(outpath.string().c_str(), target, target, item.img->channels,
                                 outbuf.data(), target * item.img->channels)) {
