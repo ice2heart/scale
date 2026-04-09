@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
     std::map<Resolution, std::filesystem::path> resolution_paths;
     for (Resolution r : {Resolution::R8K, Resolution::R4K, Resolution::R2K, Resolution::R1K}) {
         std::string fname = dir.filename().generic_string() + "_"+ to_string(r);
-        std::filesystem::path sub = dir / fname;
+        std::filesystem::path sub = dir.parent_path() / fname;
         std::error_code ec;
         std::filesystem::create_directory(sub, ec);
         if (ec) {
@@ -125,6 +125,7 @@ int main(int argc, char* argv[]) {
     for (const auto& [fname, img] : images) {
         for (const auto& [res, outdir] : resolution_paths) {
             if (size_for(res) <= 0) continue;
+            if (size_for(res) > std::max(img.width, img.height)) continue;
             tasks.push_back(WorkItem{&fname, &img, res, &outdir});
         }
     }
