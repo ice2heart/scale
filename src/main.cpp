@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
     struct WorkItem {
         const std::string* fname;
         const ImageData* img;
-        Resolution res;
+        const Resolution res;
         const std::filesystem::path* outdir;
     };
 
@@ -129,7 +129,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    size_t totalOps = tasks.size();
+    const size_t totalOps = tasks.size();
     std::atomic<size_t> opCount{0};
     std::mutex ioMutex; // protect print
 
