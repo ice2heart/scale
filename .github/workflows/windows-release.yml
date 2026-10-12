@@ -1,0 +1,83 @@
+name: Windows release
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create the GitHub release on tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # puts dumpbin on PATH
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Check static linking
+        shell: pwsh
+        run: |
+          $exe = "build/Release/scale_app.exe"
+          $deps = dumpbin /nologo /dependents $exe | Select-String -Pattern '^\s+\S+\.dll\s*$' | ForEach-Object { $_.Line.Trim() }
+          Write-Host "Dependencies:"; $deps | ForEach-Object { Write-Host "  $_" }
+          $runtime = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|ucrtbase|concrt|vcomp|api-ms-win-crt-)' }
+          if ($runtime) {
+            Write-Error "Dynamically linked C/C++ runtime: $($runtime -join ', ')"
+            exit 1
+          }
+          Write-Host "OK: C/C++ runtime is linked statically"
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          # non-ASCII folder name exercises wmain + UTF-8 paths
+          mkdir -p "smoke/тест"
+          python - <<'PY'
+          import zlib, struct
+          def png(path, w, h, ch):
+              ct = {1: 0, 2: 4, 3: 2, 4: 6}[ch]
+              row = bytes((x * 7 + i) & 255 for x in range(w) for i in range(ch))
+              raw = b''.join(b'\0' + row for _ in range(h))
+              def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d))
+              open(path, 'wb').write(b'\x89PNG\r\n\x1a\n'
+                  + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, ct, 0, 0, 0))
+                  + chunk(b'IDAT', zlib.compress(raw, 1)) + chunk(b'IEND', b''))
+          png('smoke/тест/wide.png', 2500, 1250, 3)
+          png('smoke/тест/grey.png', 1024, 2048, 2)
+          PY
+          ./build/Release/scale_app.exe "smoke/тест"
+          for f in "smoke/тест_2k/wide_2k.png" "smoke/тест_1k/wide_1k.png" \
+                   "smoke/тест_2k/grey_2k.png" "smoke/тест_1k/grey_1k.png"; do
+            test -s "$f" || { echo "missing $f"; exit 1; }
+          done
+          echo "OK: all outputs written"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build/Release/scale_app.exe, README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath scale_app-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scale_app-windows-x64
+          path: scale_app-windows-x64.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: scale_app-windows-x64.zip
+          generate_release_notes: true
