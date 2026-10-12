@@ -169,8 +169,10 @@ static int run(const std::vector<std::string>& args) {
     std::atomic<size_t> next{0};
     std::atomic<bool> failed{false};
 
-    auto worker = [&](std::stop_token st) {
-        while (!st.stop_requested()) {
+    // No stop_token: ~jthread requests stop before joining, which would make
+    // workers that haven't started yet exit without taking any work.
+    auto worker = [&] {
+        for (;;) {
             const size_t i = next.fetch_add(1);
             if (i >= total)
                 break;
